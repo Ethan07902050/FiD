@@ -9,6 +9,8 @@ import sys
 import torch
 import transformers
 import numpy as np
+from tqdm import tqdm
+from datasets import load_metric
 from pathlib import Path
 from torch.utils.data import DataLoader, RandomSampler, DistributedSampler, SequentialSampler
 from src.options import Options
@@ -43,10 +45,12 @@ def train(model, optimizer, scheduler, step, train_dataset, eval_dataset, opt, c
     loss, curr_loss = 0.0, 0.0
     epoch = 1
     model.train()
+    pbar = tqdm(total=opt.total_steps)
     while step < opt.total_steps:
         epoch += 1
         for i, batch in enumerate(train_dataloader):
             step += 1
+            pbar.update(1)
             (idx, labels, _, context_ids, context_mask) = batch
 
             train_loss = model(
@@ -67,20 +71,22 @@ def train(model, optimizer, scheduler, step, train_dataset, eval_dataset, opt, c
             curr_loss += train_loss.item()
 
             if step % opt.eval_freq == 0:
-                dev_em = evaluate(model, eval_dataset, tokenizer, collator, opt)
+                dev_em, f1, bleu = evaluate(model, eval_dataset, tokenizer, collator, opt, step)
                 model.train()
                 if opt.is_main:
                     if dev_em > best_dev_em:
                         best_dev_em = dev_em
                         src.util.save(model, optimizer, scheduler, step, best_dev_em,
                                   opt, checkpoint_path, 'best_dev')
-                    log = f"{step} / {opt.total_steps} |"
-                    log += f"train: {curr_loss/opt.eval_freq:.3f} |"
-                    log += f"evaluation: {100*dev_em:.2f}EM |"
+                    log = f"{step} / {opt.total_steps} | "
+                    log += f"train: {curr_loss/opt.eval_freq:.3f} | "
+                    log += f"evaluation: EM {dev_em:.2f}  | F1 {f1:.2f} | BLEU {bleu:.2f} | "
                     log += f"lr: {scheduler.get_last_lr()[0]:.5f}"
                     logger.info(log)    
                     if tb_logger is not None:
-                        tb_logger.add_scalar("Evaluation", dev_em, step)
+                        tb_logger.add_scalar("Evaluation EM", dev_em, step)
+                        tb_logger.add_scalar("Evaluation F1", f1, step)
+                        tb_logger.add_scalar("Evaluation BLEU", bleu, step)
                         tb_logger.add_scalar("Training", curr_loss / (opt.eval_freq), step)
                     curr_loss = 0.
 
@@ -90,7 +96,9 @@ def train(model, optimizer, scheduler, step, train_dataset, eval_dataset, opt, c
             if step > opt.total_steps:
                 break
 
-def evaluate(model, dataset, tokenizer, collator, opt):
+    pbar.close()
+
+def evaluate(model, dataset, tokenizer, collator, opt, step):
     sampler = SequentialSampler(dataset)
     dataloader = DataLoader(dataset,
         sampler=sampler,
@@ -101,10 +109,15 @@ def evaluate(model, dataset, tokenizer, collator, opt):
     )
     model.eval()
     total = 0
-    exactmatch = []
+    exactmatch, f1 = [], []
+    preds, refs = [], []
+    write_path = Path(opt.checkpoint_dir) / opt.name / 'results'
+    write_path.mkdir(parents=True, exist_ok=True)
+    fw = open(write_path / f'{step}.txt', 'w')
+
     model = model.module if hasattr(model, "module") else model
     with torch.no_grad():
-        for i, batch in enumerate(dataloader):
+        for i, batch in enumerate(tqdm(dataloader)):
             (idx, _, _, context_ids, context_mask) = batch
 
             outputs = model.generate(
@@ -112,16 +125,28 @@ def evaluate(model, dataset, tokenizer, collator, opt):
                 attention_mask=context_mask.cuda(),
                 max_length=50
             )
-
+            
             for k, o in enumerate(outputs):
                 ans = tokenizer.decode(o, skip_special_tokens=True)
-                gold = dataset.get_example(idx[k])['answers']
-                score = src.evaluation.ems(ans, gold)
+                # gold = dataset.get_example(idx[k])['answers']
+                example = dataset.get_example(idx[k])
+                gold = example['target']
+                em_score = src.evaluation.exact_match_score(ans, gold)
+                f1_score = src.evaluation.f1_score(ans, gold)
                 total += 1
-                exactmatch.append(score)
 
+                exactmatch.append(em_score)
+                f1.append(f1_score)
+                preds.append(ans)
+                refs.append([gold])
+                fw.write(str(example['id']) + "\t" + ans + '\n')
+
+    fw.close()
+    sacrebleu = load_metric("sacrebleu")
+    results = sacrebleu.compute(predictions=preds, references=refs)
     exactmatch, total = src.util.weighted_average(np.mean(exactmatch), total, opt)
-    return exactmatch
+    f1, total = src.util.weighted_average(np.mean(f1), total, opt)
+    return exactmatch, np.mean(f1), results["score"] / 100.0
 
 if __name__ == "__main__":
     options = Options()

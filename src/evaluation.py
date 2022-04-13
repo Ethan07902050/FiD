@@ -14,6 +14,7 @@ from functools import partial
 from multiprocessing import Pool as ProcessPool
 from typing import Tuple, List, Dict
 import numpy as np
+from collections import Counter
 
 """
 Evaluation code from DPR: https://github.com/facebookresearch/DPR
@@ -140,6 +141,18 @@ def exact_match_score(prediction, ground_truth):
 
 def ems(prediction, ground_truths):
     return max([exact_match_score(prediction, gt) for gt in ground_truths])
+
+def f1_score(prediction, ground_truth):
+    prediction_tokens = normalize_answer(prediction).split()
+    ground_truth_tokens = normalize_answer(ground_truth).split()
+    common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0
+    precision = 1.0 * num_same / len(prediction_tokens)
+    recall = 1.0 * num_same / len(ground_truth_tokens)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return f1
 
 ####################################################
 ########        RETRIEVER EVALUATION        ########

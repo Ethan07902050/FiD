@@ -1,0 +1,14 @@
+python train_reader.py \
+        --train_data ../multidoc2dial/fid-generation-train.json \
+        --eval_data ../multidoc2dial/fid-generation-val.json \
+        --model_size base \
+        --per_gpu_batch_size 4 \
+        --accumulation_steps 16 \
+        --n_context 10 \
+        --name test1 \
+        --checkpoint_dir checkpoint \
+        --use_checkpoint \
+        --total_steps 10 \
+        --warmup_steps 1000 \
+        --eval_freq 10 \
+        --save_freq 2000
