@@ -80,7 +80,7 @@ def train(model, optimizer, scheduler, step, train_dataset, eval_dataset, opt, c
                                   opt, checkpoint_path, 'best_dev')
                     log = f"{step} / {opt.total_steps} | "
                     log += f"train: {curr_loss/opt.eval_freq:.3f} | "
-                    log += f"evaluation: EM {dev_em:.2f}  | F1 {f1:.2f} | BLEU {bleu:.2f} | "
+                    log += f"evaluation: EM {dev_em:.4f}  | F1 {f1:.4f} | BLEU {bleu:.4f} | "
                     log += f"lr: {scheduler.get_last_lr()[0]:.5f}"
                     logger.info(log)    
                     if tb_logger is not None:
@@ -140,7 +140,7 @@ def evaluate(model, dataset, tokenizer, collator, opt, step):
                 preds.append(ans)
                 refs.append([gold])
                 fw.write(str(example['id']) + "\t" + ans + '\n')
-
+                
     fw.close()
     sacrebleu = load_metric("sacrebleu")
     results = sacrebleu.compute(predictions=preds, references=refs)
